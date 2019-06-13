@@ -1,0 +1,102 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+import rospy
+import rosbag
+import tf2_ros
+import argparse
+import sys
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(
+        description='Node to read messages from a rosbag and publish the same set of message all the time.')
+    parser.add_argument('-t',
+                        '--topics',
+                        type=str,
+                        nargs='+',
+                        help='List of all topics to be read and published (separated by spaces)')
+    parser.add_argument('-r', '--rate', type=int, default=10, help='Rate in hz to publish the messages with')
+    parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
+    parser.add_argument('-d', '--max-dt', type=float, default=0.5, help='Maximum time period to read from the rosbag')
+    parser.add_argument('--tf', action='store_true', help='Also publish the tf-tree')
+    parser.add_argument('bagfile', type=str, help='Path to the rosbag file to be read')
+
+    args = parser.parse_args()
+    print("Reading topics:\n * %s\nfrom rosbag %s.\n" % ("\n * ".join(args.topics), args.bagfile))
+
+    rospy.init_node('static_rosbag_publisher', anonymous=False)
+    rate = rospy.Rate(args.rate)
+
+    bag = rosbag.Bag(args.bagfile)
+
+    read_msgs = {}
+
+    for topic in args.topics:
+        read_msgs[topic] = None
+
+    #topics = list(args.topics)
+    if args.tf:
+        args.topics.append("/tf")
+        read_msgs["/tf"] = {}
+        tf_broadcaster = tf2_ros.TransformBroadcaster()
+
+    print("Parsing the rosbag..", end='')
+    start_time = rospy.Time(bag.get_start_time()) + rospy.Duration(args.start_time)
+    for topic, msg, t in bag.read_messages(topics=args.topics, start_time=start_time):
+        dt = t - start_time
+
+        if dt > rospy.Duration(args.max_dt):
+            break
+
+        # Store tf-Messages
+        if topic == "/tf":
+            for trafo in msg.transforms:
+                from_frame = trafo.header.frame_id
+                to_frame = trafo.child_frame_id
+                frame_ids = (from_frame, to_frame)
+                if not frame_ids in read_msgs["/tf"]:
+                    read_msgs["/tf"][frame_ids] = trafo
+                # print("%s => %s" % (from_frame, to_frame))
+
+        # Store general messages
+        if read_msgs[topic] is None:
+            read_msgs[topic] = msg
+
+        print(".", end='')
+        sys.stdout.flush()
+    print(" Done.")
+
+    # Fix all frame_ids (remove leading '/')
+    for topic_name, msg in read_msgs.iteritems():
+        try:
+            if msg.header.frame_id[0] == '/':
+                msg.header.frame_id = msg.header.frame_id[1:]
+        except:
+            pass
+
+    publishers = {}
+
+    for topic_name, msg in read_msgs.iteritems():
+        if topic_name != "/tf":
+            if msg is not None:
+                publishers[topic_name] = rospy.Publisher(topic_name, type(msg), queue_size=10)
+            else:
+                rospy.logerr("Message for topic '%s' could not be found in the rosbag." % topic_name)
+
+    print("\nStarting to publish the static set of messages...")
+    while not rospy.is_shutdown():
+        stamp = rospy.Time.now()
+
+        for topic_name, msg in read_msgs.iteritems():
+            if topic_name == "/tf":
+                rospy.loginfo("Publish %s...", topic_name)
+                for trafo_key, trafo in msg.iteritems():
+                    trafo.header.stamp = stamp
+                    tf_broadcaster.sendTransform(trafo)
+            else:
+                if msg is not None:
+                    rospy.loginfo("Publish %s...", topic_name)
+                    msg.header.stamp = stamp
+                    publishers[topic_name].publish(msg)
+
+        rate.sleep()

@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+
+<package format="2">
+  <name>rosbag_util</name>
+  <version>0.0.1</version>
+  <description>Collection of custom tools related to rosbags.</description>
+
+  <maintainer email="jan.kallwies@unibw.de">jaka</maintainer>
+
+  <license>BSD</license>
+
+  <author email="jan.kallwies@unibw.de">jaka</author>
+  <author email="bianca.forkel@unibw.de">bifo</author>
+
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>rospy</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+</package>
