@@ -17,7 +17,7 @@ if __name__ == '__main__':
                         help='List of all topics to be read and published (separated by spaces)')
     parser.add_argument('-r', '--rate', type=int, default=10, help='Rate in hz to publish the messages with')
     parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
-    parser.add_argument('-d', '--max-dt', type=float, default=0.5, help='Maximum time period to read from the rosbag')
+    parser.add_argument('-d', '--max-dt', type=float, default=1, help='Maximum time period to read from the rosbag')
     parser.add_argument('--tf', action='store_true', help='Also publish the tf-tree')
     parser.add_argument('bagfile', type=str, help='Path to the rosbag file to be read')
 
