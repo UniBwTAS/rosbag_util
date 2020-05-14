@@ -38,6 +38,8 @@ if __name__ == '__main__':
     if args.tf:
         args.topics.append("/tf")
         args.topics.append("/tf_static")
+        args.topics.append("tf")
+        args.topics.append("tf_static")
         read_msgs["/tf"] = {}
         tf_broadcaster = tf2_ros.TransformBroadcaster()
 
@@ -50,7 +52,7 @@ if __name__ == '__main__':
             break
 
         # Store tf-Messages
-        if topic == "/tf" or topic == "/tf_static":
+        if topic == "/tf" or topic == "/tf_static" or topic == "tf" or topic == "tf_static":
             for trafo in msg.transforms:
                 from_frame = trafo.header.frame_id
                 to_frame = trafo.child_frame_id
