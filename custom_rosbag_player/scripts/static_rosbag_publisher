@@ -6,6 +6,8 @@ import rosbag
 import tf2_ros
 import argparse
 import sys
+import time
+from rosgraph_msgs.msg import Clock
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
@@ -26,6 +28,8 @@ if __name__ == '__main__':
 
     rospy.init_node('static_rosbag_publisher', anonymous=False)
     rate = rospy.Rate(args.rate)
+
+    publish_clock = rospy.get_param("use_sim_time", False)
 
     bag = rosbag.Bag(args.bagfile)
 
@@ -86,9 +90,17 @@ if __name__ == '__main__':
             else:
                 rospy.logerr("Message for topic '%s' could not be found in the rosbag." % topic_name)
 
+    clock_publisher = rospy.Publisher("/clock", Clock, queue_size=10)
+
     print("\nStarting to publish the static set of messages...")
     while not rospy.is_shutdown():
-        stamp = rospy.Time.now()
+        stamp = rospy.Time.from_sec(time.time()) if publish_clock else rospy.Time.now()
+
+        if publish_clock:
+            rospy.loginfo("Publish /clock...")
+            clock_msg = Clock()
+            clock_msg = stamp
+            clock_publisher.publish(clock_msg)
 
         for topic_name, msg in read_msgs.iteritems():
             if topic_name == "/tf":
@@ -99,7 +111,14 @@ if __name__ == '__main__':
             else:
                 if msg is not None:
                     rospy.loginfo("Publish %s...", topic_name)
-                    msg.header.stamp = stamp
+                    try:
+                        msg.header.stamp = stamp
+                    except:
+                        pass
                     publishers[topic_name].publish(msg)
 
-        rate.sleep()
+        if publish_clock:
+            time.sleep(1.0/args.rate)
+        else:
+            rate.sleep()
+
