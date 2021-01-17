@@ -21,6 +21,10 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
     parser.add_argument('-d', '--max-dt', type=float, default=1, help='Maximum time period to read from the rosbag')
     parser.add_argument('--tf', action='store_true', help='Also publish the tf-tree')
+    parser.add_argument('--ignore-tf-frames',
+                        type=str,
+                        nargs='+',
+                        help='List of tf frames to be ignored')
     parser.add_argument('bagfile', type=str, help='Path to the rosbag file to be read')
 
     args = parser.parse_args()
@@ -50,6 +54,11 @@ if __name__ == '__main__':
             from_frame = trafo.header.frame_id
             to_frame = trafo.child_frame_id
             frame_ids = (from_frame, to_frame)
+
+            if to_frame in args.ignore_tf_frames or from_frame in args.ignore_tf_frames:
+                rospy.logwarn("Ignoring tf trafo %s -> %s" % (from_frame, to_frame))
+                continue
+
             if not frame_ids in read_msgs["/tf"]:
                 read_msgs["/tf"][frame_ids] = trafo
             # print("%s => %s" % (from_frame, to_frame))
