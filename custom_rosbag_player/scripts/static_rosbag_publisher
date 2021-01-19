@@ -28,7 +28,11 @@ if __name__ == '__main__':
     parser.add_argument('bagfile', type=str, help='Path to the rosbag file to be read')
 
     args = parser.parse_args()
-    print("Reading topics:\n * %s\nfrom rosbag %s.\n" % ("\n * ".join(args.topics), args.bagfile))
+
+    if args.topics is not None:
+        print("Reading topics:\n * %s\nfrom rosbag %s.\n" % ("\n * ".join(args.topics), args.bagfile))
+    else:
+        print("Reading all topics from rosbag %s.\n" % args.bagfile)
 
     if args.ignore_tf_frames is None:
         args.ignore_tf_frames = []
@@ -39,6 +43,12 @@ if __name__ == '__main__':
     publish_clock = rospy.get_param("use_sim_time", False)
 
     bag = rosbag.Bag(args.bagfile)
+
+    # Get all topics in the bag file
+    if args.topics is None:
+        args.topics = []
+        for topic in bag.get_type_and_topic_info()[1].keys():
+            args.topics.append(topic)
 
     read_msgs = {}
 
