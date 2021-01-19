@@ -30,6 +30,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     print("Reading topics:\n * %s\nfrom rosbag %s.\n" % ("\n * ".join(args.topics), args.bagfile))
 
+    if args.ignore_tf_frames is None:
+        args.ignore_tf_frames = []
+
     rospy.init_node('static_rosbag_publisher', anonymous=False)
     rate = rospy.Rate(args.rate)
 
