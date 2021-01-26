@@ -1,0 +1,12 @@
+<library path="lib/librviz_rosbag_tools">
+  <class name="rviz_rosbag_tools/Rosbag"
+         type="rosbag_panel::RosbagPanel"
+         base_class_type="rviz::Panel">
+    <description>A panel widget for simple rosbag control. Play rosbag using "rosrun rosbag play BAGFILE __name:=rosbag_play".</description>
+  </class>
+  <class name="rviz_rosbag_tools/Toggle Rosbag"
+         type="rosbag_tool::RosbagTool"
+         base_class_type="rviz::Tool">
+    <description>Tool for simple rosbag control. Play rosbag using "rosrun rosbag play BAGFILE __name:=rosbag_play".</description>
+  </class>
+</library>
