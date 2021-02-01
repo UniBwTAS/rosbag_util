@@ -1,0 +1,338 @@
+#!/usr/bin/env python
+from __future__ import print_function
+
+import rospy
+import rosbag
+import tf2_ros
+import argparse
+import sys
+import time
+from rosgraph_msgs.msg import Clock
+from getch import getch
+import time
+import threading
+import datetime
+from multiprocessing import Lock
+
+
+def stampToStr(stamp):
+    try:
+        return "%d.%d" % (stamp.secs, stamp.nsecs)
+    except:
+        return "None"
+
+
+class SequenceRosbagPublisher:
+    def __init__(self):
+        parser = argparse.ArgumentParser(
+            description=
+            'Node to read messages from a rosbag and publish certain messages sequentially in a convenient way.')
+        parser.add_argument('-t',
+                            '--trigger-topics',
+                            type=str,
+                            nargs='+',
+                            help='The topics to be published sequentially (separated by spaces).')
+        parser.add_argument('--ignore-other', action='store_true', help='Only publish the trigger topic and tf.')
+        parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
+        parser.add_argument('--additional-tf-span',
+                            type=float,
+                            default=0.5,
+                            help='The duration the tf timespan to be published is being extended. (in seconds)')
+        # parser.add_argument('-d', '--duration', type=float, default=-1, help='Maximum time period to read from the rosbag')
+        parser.add_argument('--ignore-tf-frames', type=str, nargs='+', help='List of tf frames to be ignored')
+        parser.add_argument('bagfile', type=str, help='Path to the rosbag file to be read')
+
+        self.args = parser.parse_args()
+
+        if self.args.ignore_tf_frames is None:
+            self.args.ignore_tf_frames = []
+
+        self.bag = rosbag.Bag(self.args.bagfile)
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster()
+        self.tf_static_broadcaster = tf2_ros.StaticTransformBroadcaster()
+        self.tf_timespan = rospy.Duration(0.2)
+        self.publishers = {}
+        self.tf_topics = ["/tf", "tf", "/tf_static", "tf_static"]
+
+        if self.args.trigger_topics is None:
+            print("No topics given to trigger on. Please specify it by '--topics ...'.")
+            print("The topics in the bag are:")
+            for topic in self.bag.get_type_and_topic_info()[1].keys():
+                print(topic)
+            exit(1)
+
+        self.longest_trigger_topic_name = 0
+        for topic in self.args.trigger_topics:
+            if len(topic) > self.longest_trigger_topic_name:
+                self.longest_trigger_topic_name = len(topic)
+
+        self.msgs_to_publish = None
+        self.tf_msgs_to_publish = None
+
+        self._current_stamp = None
+        self._stamp_mutex = Lock()
+
+        # Get the current parameters
+        self.original_use_sim_time = rospy.get_param("use_sim_time", False)
+        rospy.get_param("static_clock_mode", True)
+
+        # Set the parameters
+        rospy.set_param("use_sim_time", True)
+        rospy.set_param("static_clock_mode", True)
+
+        timerThread = threading.Thread(target=self.publishClock)
+        timerThread.daemon = True
+        timerThread.start()
+
+        self.readAllTfMessages()
+
+        self.reset()
+
+    def setCurrentStamp(self, current_stamp):
+        with self._stamp_mutex:
+            self._current_stamp = current_stamp
+
+    def getCurrentStamp(self):
+        with self._stamp_mutex:
+            return self._current_stamp
+
+    def reset(self):
+        self.setCurrentStamp(rospy.Time(self.bag.get_start_time()) + rospy.Duration(self.args.start_time))
+        self.resetLastTopicTimes()
+
+        self.publishNextBlock()
+
+    def resetLastTopicTimes(self):
+        self.last_topic_time = {}
+        for topic in self.args.trigger_topics:
+            self.last_topic_time[topic] = None
+
+    def readTfMessage(self, msg, topic):
+        for trafo in msg.transforms:
+            from_frame = trafo.header.frame_id
+            to_frame = trafo.child_frame_id
+            frame_ids = (from_frame, to_frame)
+
+            if to_frame in self.args.ignore_tf_frames or from_frame in self.args.ignore_tf_frames:
+                rospy.logwarn("Ignoring tf trafo %s -> %s" % (from_frame, to_frame))
+                continue
+
+            if "static" in topic:
+                self.tf_static_msgs.append(trafo)
+            else:
+                self.tf_msgs.append(trafo)
+            rospy.logdebug("%s: %s => %s" % (topic, from_frame, to_frame))
+
+    def readAllTfMessages(self):
+        print("Reading all tf messages...", end="")
+        self.tf_msgs = []
+        self.tf_static_msgs = []
+        for topic, msg, t in self.bag.read_messages(topics=self.tf_topics):
+            self.readTfMessage(msg, topic)
+        print(" Done. Read %d normal and %d static tf messages." % (len(self.tf_msgs), len(self.tf_static_msgs)))
+
+    def publishClock(self):
+        clock_publisher = rospy.Publisher("/clock", Clock, queue_size=10)
+        while True:
+            rospy.logdebug("Publish /clock...")
+            clock_msg = Clock()
+            clock_publisher.publish(self.getCurrentStamp())
+
+            time.sleep(0.05)  # TODO: Make it a parameter!
+
+    def readBlockAt(self, start_stamp):
+        time_elapsed = start_stamp - rospy.Time(self.bag.get_start_time())
+        bag_duration = rospy.Time(self.bag.get_end_time()) - rospy.Time(self.bag.get_start_time())
+
+        print("\nLooking for the trigger messages starting at %d.%d (%fs / %fs)..." %
+              (start_stamp.secs, start_stamp.nsecs, time_elapsed.to_sec(), bag_duration.to_sec()))
+
+        # 1. Read the messages
+        self.msgs_to_publish = []
+        topic_found = {}
+
+        min_stamp = None
+        max_stamp = None
+
+        for topic in self.args.trigger_topics:
+            topic_found[topic] = False
+
+        latest_bag_stamp = rospy.Time(0)
+
+        for topic, msg, t in self.bag.read_messages(start_time=start_stamp):
+            # Ignore tf topics here
+            if topic in self.tf_topics:
+                continue
+
+            # print("Read %s, t=%s" % (topic, t))
+
+            # Handle trigger topics
+            if topic in self.args.trigger_topics:
+                if topic_found[topic] == False and not t == self.last_topic_time[topic]:
+                    self.msgs_to_publish.append((topic, msg))
+                    topic_found[topic] = True
+                    self.last_topic_time[topic] = t
+                    try:
+                        print("Found topic %s #%05d @ %d.%d (t=%d.%d)" %
+                              (topic.ljust(self.longest_trigger_topic_name), msg.header.seq, msg.header.stamp.secs,
+                               msg.header.stamp.nsecs, t.secs, t.nsecs))
+                    except:
+                        print("Found topic %s (t=%s)" % (topic.ljust(self.longest_trigger_topic_name), t))
+
+                    if False not in topic_found.values():
+                        rospy.logdebug("Found all trigger topics. => Cancel reading...")
+                        break
+            # Handle other topics
+            elif self.args.ignore_other == False:
+                rospy.logdebug("Read other topic '%s'...", topic)
+                self.msgs_to_publish.append((topic, msg))
+
+            # Store time range
+            try:
+                data_stamp = msg.header.stamp
+                if min_stamp is None:
+                    min_stamp = data_stamp
+                if max_stamp is None:
+                    max_stamp = data_stamp
+
+                if data_stamp < min_stamp:
+                    min_stamp = data_stamp
+                if data_stamp > max_stamp:
+                    max_stamp = data_stamp
+            except:
+                pass
+
+            if t > latest_bag_stamp:
+                latest_bag_stamp = t
+
+        # Ensure the time range to be valid, if no stamped data was read at all
+        if min_stamp is None:
+            min_stamp = start_stamp
+        if max_stamp is None:
+            max_stamp = latest_bag_stamp
+
+        rospy.logdebug("stamp range: %d.%d -> %d.%d" %
+                       (min_stamp.secs, min_stamp.nsecs, max_stamp.secs, max_stamp.nsecs))
+
+        print("start_stamp=%s, latest_bag_stamp=%s" % (stampToStr(start_stamp), stampToStr(latest_bag_stamp)))
+
+        self.setCurrentStamp(latest_bag_stamp)
+
+        # Filter the tf messages
+        self.tf_msgs_to_publish = []
+        for tf_msg in self.tf_msgs:
+            if tf_msg.header.stamp >= (min_stamp -
+                                       rospy.Duration(self.args.additional_tf_span)) and tf_msg.header.stamp <= (
+                                           max_stamp + rospy.Duration(self.args.additional_tf_span)):
+                self.tf_msgs_to_publish.append(tf_msg)
+
+    def publishMessages(self):
+        if self.msgs_to_publish is None or self.tf_msgs_to_publish is None:
+            print("No messages read yet.")
+        else:
+            time_elapsed = self.getCurrentStamp() - rospy.Time(self.bag.get_start_time())
+            bag_duration = rospy.Time(self.bag.get_end_time()) - rospy.Time(self.bag.get_start_time())
+            print("Publishing %d messages and %d tf transforms at %s (%fs / %fs)..." %
+                  (len(self.msgs_to_publish), len(self.tf_msgs_to_publish) + len(self.tf_static_msgs),
+                   stampToStr(self.getCurrentStamp()), time_elapsed.to_sec(), bag_duration.to_sec()))
+
+            # 1. Publish tf_static
+            for tf_msg in self.tf_static_msgs:
+                rospy.logdebug("Publish /tf message '%s'->'%s' @ %d.%d..." %
+                               (tf_msg.header.frame_id, tf_msg.child_frame_id, tf_msg.header.stamp.secs,
+                                tf_msg.header.stamp.nsecs))
+                self.tf_static_broadcaster.sendTransform(tf_msg)
+
+            # 2. Publish tf
+            for tf_msg in self.tf_msgs_to_publish:
+                rospy.logdebug("Publish /tf message '%s'->'%s' @ %d.%d..." %
+                               (tf_msg.header.frame_id, tf_msg.child_frame_id, tf_msg.header.stamp.secs,
+                                tf_msg.header.stamp.nsecs))
+                self.tf_broadcaster.sendTransform(tf_msg)
+
+            # 3. Publish the messages
+            for msg_elem in self.msgs_to_publish:
+                topic = msg_elem[0]
+                msg = msg_elem[1]
+
+                rospy.logdebug("Publish %s..." % topic)
+                if topic not in self.publishers:
+                    self.publishers[topic] = rospy.Publisher(topic, type(msg), queue_size=10, latch=True)
+
+                self.publishers[topic].publish(msg)
+
+    def publishNextBlock(self):
+        self.readBlockAt(self.getCurrentStamp())
+        self.publishMessages()
+
+    def run(self):
+        print(
+            "Ready to start. Press 'n' or space to publish the next frame, press 'a' to publish the last frame once again..."
+        )
+        while (True):
+            user_input = getch()
+            if user_input == 'n' or user_input == ' ':
+                self.publishNextBlock()
+            elif user_input == 'a':
+                self.publishMessages()
+            elif user_input == 'r':
+                print("\n====== RESET ======\n")
+                self.reset()
+            elif user_input == '\x03' or user_input == "q":
+                self.shutdown()
+
+    def shutdown(self):
+        print("shutting down...")
+
+        # Reset the parameters
+        rospy.set_param("use_sim_time", self.original_use_sim_time)
+        rospy.set_param("static_clock_mode", False)
+
+        rospy.signal_shutdown("User requested shutdown.")
+        exit(0)
+
+
+if __name__ == '__main__':
+    rospy.init_node('sequence_rosbag_publisher', anonymous=False)
+
+    sequence_rosbag_publisher = SequenceRosbagPublisher()
+    sequence_rosbag_publisher.run()
+
+    exit(0)
+
+    for topic_name, msg in read_msgs.iteritems():
+        if topic_name != "/tf":
+            if msg is not None:
+                publishers[topic_name] = rospy.Publisher(topic_name, type(msg), queue_size=10)
+            else:
+                rospy.logerr("Message for topic '%s' could not be found in the rosbag." % topic_name)
+
+    print("\nStarting to publish the static set of messages...")
+    while not rospy.is_shutdown():
+        stamp = rospy.Time.from_sec(time.time()) if publish_clock else rospy.Time.now()
+
+        if publish_clock:
+            rospy.loginfo("Publish /clock...")
+            clock_msg = Clock()
+            clock_msg = stamp
+            clock_publisher.publish(clock_msg)
+
+        for topic_name, msg in read_msgs.iteritems():
+            if topic_name == "/tf":
+                rospy.loginfo("Publish %s...", topic_name)
+                for trafo_key, trafo in msg.iteritems():
+                    trafo.header.stamp = stamp
+                    tf_broadcaster.sendTransform(trafo)
+            else:
+                if msg is not None:
+                    rospy.loginfo("Publish %s...", topic_name)
+                    try:
+                        msg.header.stamp = stamp
+                    except:
+                        pass
+                    publishers[topic_name].publish(msg)
+
+        if publish_clock:
+            time.sleep(1.0 / args.rate)
+        else:
+            rate.sleep()
