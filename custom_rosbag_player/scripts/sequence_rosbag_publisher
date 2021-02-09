@@ -33,7 +33,8 @@ class SequenceRosbagPublisher:
                             nargs='+',
                             help='The topics to be published sequentially (separated by spaces).')
         parser.add_argument('--ignore-other', action='store_true', help='Only publish the trigger topic and tf.')
-        parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
+        parser.add_argument('-r', '--relative-start-time', type=float, default=0.0, help='Relative start time of the rosbag')
+        parser.add_argument('-a', '--absolute-start-time', type=float, default=0.0, help='Absolute start time of the rosbag')
         parser.add_argument('--additional-tf-span',
                             type=float,
                             default=0.5,
@@ -53,6 +54,11 @@ class SequenceRosbagPublisher:
         self.tf_timespan = rospy.Duration(0.2)
         self.publishers = {}
         self.tf_topics = ["/tf", "tf", "/tf_static", "tf_static"]
+
+        if self.args.absolute_start_time > 0:
+            self.start_time = rospy.Time(self.args.absolute_start_time)
+        else:
+            self.start_time = rospy.Time(self.bag.get_start_time()) + rospy.Duration(self.args.relative_start_time)
 
         if self.args.trigger_topics is None:
             print("No topics given to trigger on. Please specify it by '--topics ...'.")
@@ -97,7 +103,7 @@ class SequenceRosbagPublisher:
             return self._current_stamp
 
     def reset(self):
-        self.setCurrentStamp(rospy.Time(self.bag.get_start_time()) + rospy.Duration(self.args.start_time))
+        self.setCurrentStamp(self.start_time)
         self.resetLastTopicTimes()
 
         self.publishNextBlock()
