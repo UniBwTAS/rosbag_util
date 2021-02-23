@@ -17,8 +17,9 @@ if __name__ == '__main__':
                         type=str,
                         nargs='+',
                         help='List of all topics to be read and published (separated by spaces)')
-    parser.add_argument('-r', '--rate', type=int, default=10, help='Rate in hz to publish the messages with')
-    parser.add_argument('-s', '--start-time', type=float, default=0.0, help='Start time of the rosbag')
+    parser.add_argument('--rate', type=int, default=10, help='Rate in hz to publish the messages with')
+    parser.add_argument('-r', '--relative-start-time', type=float, default=0.0, help='Relative start time of the rosbag')
+    parser.add_argument('-a', '--absolute-start-time', type=float, default=0.0, help='Absolute start time of the rosbag')
     parser.add_argument('-d', '--max-dt', type=float, default=1, help='Maximum time period to read from the rosbag')
     parser.add_argument('--tf', action='store_true', help='Also publish the tf-tree')
     parser.add_argument('--ignore-tf-frames',
@@ -43,6 +44,11 @@ if __name__ == '__main__':
     publish_clock = rospy.get_param("use_sim_time", False)
 
     bag = rosbag.Bag(args.bagfile)
+
+    if args.absolute_start_time > 0:
+        start_time = rospy.Time(args.absolute_start_time)
+    else:
+        start_time = rospy.Time(bag.get_start_time()) + rospy.Duration(args.relative_start_time)
 
     # Get all topics in the bag file
     if args.topics is None:
@@ -82,7 +88,6 @@ if __name__ == '__main__':
     for topic, msg, t in bag.read_messages(topics=["/tf_static", "tf_static"]):
         readTfMessage(msg)
 
-    start_time = rospy.Time(bag.get_start_time()) + rospy.Duration(args.start_time)
     for topic, msg, t in bag.read_messages(topics=args.topics, start_time=start_time):
         dt = t - start_time
 
