@@ -51,17 +51,25 @@ if __name__ == '__main__':
         start_time = rospy.Time(bag.get_start_time()) + rospy.Duration(args.relative_start_time)
 
     # Get all topics in the bag file
+
+    ignore_topics = []
+    if not args.tf:
+        ignore_topics.append("tf")
+        ignore_topics.append("/tf")
+        ignore_topics.append("tf_static")
+        ignore_topics.append("/tf_static")
+
     if args.topics is None:
         args.topics = []
         for topic in bag.get_type_and_topic_info()[1].keys():
-            args.topics.append(topic)
+            if topic not in ignore_topics:
+                args.topics.append(topic)
 
     read_msgs = {}
 
     for topic in args.topics:
         read_msgs[topic] = None
 
-    #topics = list(args.topics)
     if args.tf:
         args.topics.append("/tf")
         args.topics.append("tf")
@@ -85,8 +93,9 @@ if __name__ == '__main__':
     print("Parsing the rosbag..", end='')
 
     # Store static tf-Messages
-    for topic, msg, t in bag.read_messages(topics=["/tf_static", "tf_static"]):
-        readTfMessage(msg)
+    if args.tf:
+        for topic, msg, t in bag.read_messages(topics=["/tf_static", "tf_static"]):
+            readTfMessage(msg)
 
     for topic, msg, t in bag.read_messages(topics=args.topics, start_time=start_time):
         dt = t - start_time
@@ -95,7 +104,7 @@ if __name__ == '__main__':
             break
 
         # Store tf-Messages
-        if topic == "/tf" or topic == "tf":
+        if args.tf and topic in ["/tf", "tf"]:
             readTfMessage(msg)
 
         # Store general messages
